@@ -72,7 +72,9 @@ else()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    SET(LLAMA_FATAL_WARNINGS ON)
+    if(NOT DEFINED LLAMA_FATAL_WARNINGS)
+        SET(LLAMA_FATAL_WARNINGS ON)
+    endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     if(NOT DEFINED GGML_OPENMP OR GGML_OPENMP)
         execute_process(
@@ -116,7 +118,7 @@ file(COPY ${LLAMA_CPP_ROOT}/vendor/nlohmann/json.hpp DESTINATION ${CMAKE_SOURCE_
 file(COPY ${LLAMA_CPP_ROOT}/vendor/cpp-httplib/httplib.h DESTINATION ${CMAKE_SOURCE_DIR}/include)
 
 set(PUBLIC_ASSETS
-    index.html.gz
+    index.html
     loading.html
 )
 
@@ -152,7 +154,7 @@ add_subdirectory("llama.cpp/tools/mtmd")
 set_property(DIRECTORY llama.cpp PROPERTY CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
 
 if (NOT WIN32)
-    foreach (target common ggml-base ggml-cpu ggml-amx ggml-blas ggml-cann ggml-cuda ggml-hip ggml-kompute ggml-metal ggml-musa ggml-rpc ggml-sycl ggml-vulkan ggml llama)
+    foreach (target llama-common llama-common-base ggml-base ggml-cpu ggml-amx ggml-blas ggml-cann ggml-cuda ggml-hip ggml-kompute ggml-metal ggml-musa ggml-rpc ggml-sycl ggml-vulkan ggml llama)
         if (TARGET ${target})
             set_target_properties(${target} PROPERTIES COMPILE_FLAGS ${STATIC_FLAGS})
             target_compile_options(${target} PRIVATE -Wno-return-type -Wno-sometimes-uninitialized)
@@ -162,7 +164,7 @@ if (NOT WIN32)
 endif()
 
 if(ARCHITECTURE MATCHES "tinyblas")
-    foreach (target common ggml-cuda ggml-hip ggml-musa)
+    foreach (target llama-common ggml-cuda ggml-hip ggml-musa)
         if (TARGET ${target})
             target_compile_definitions(${target} PUBLIC GGML_USE_TINYBLAS GGML_CUDA_NO_FA GGML_CUDA_NO_IQUANTS)
         endif()
