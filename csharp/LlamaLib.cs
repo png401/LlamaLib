@@ -677,7 +677,10 @@ namespace UndreamAI.LlamaLib
         public IntPtr LLMService_From_Command_Internal([MarshalAs(UnmanagedType.LPStr)] string paramsString) => CreateLLMWithFallback(() => LLMService_From_Command_Internal_Single(paramsString));
 
 
-        private void LoadRuntimeLibrary()
+        // Loads the runtime dispatcher library and resolves its static delegates (Has_GPU_Layers,
+        // Available_Architectures). Must be safe to call before any LlamaLib instance exists, since
+        // callers like LLMService.FromCommand need Has_GPU_Layers before they can construct one.
+        internal static void LoadRuntimeLibrary()
         {
             lock (runtimeLock)
             {
@@ -720,6 +723,14 @@ namespace UndreamAI.LlamaLib
 
         public virtual string FindLibrary(string libraryName)
         {
+            return FindLibraryStatic(libraryName);
+        }
+
+        // Non-virtual lookup shared by FindLibrary and the static bootstrap path
+        // (GetRuntimeLibraryPath / LoadRuntimeLibrary), which run before any LlamaLib
+        // instance exists and therefore cannot go through virtual dispatch.
+        private static string FindLibraryStatic(string libraryName)
+        {
             List<string> lookupDirs = new List<string>();
             lookupDirs.Add(baseLibraryPath);
             lookupDirs.Add(Path.Combine(baseLibraryPath, "runtimes", GetPlatform(), "native"));
@@ -733,7 +744,7 @@ namespace UndreamAI.LlamaLib
             throw new InvalidOperationException($"Library {libraryName} not found!");
         }
 
-        private string GetRuntimeLibraryPath()
+        private static string GetRuntimeLibraryPath()
         {
             string platform = GetPlatform();
             string libName;
@@ -745,7 +756,7 @@ namespace UndreamAI.LlamaLib
                 libName = "llamalib_" + platform + "_runtime.dll";
             else
                 throw new ArgumentException("Unknown platform " + RuntimeInformation.OSDescription);
-            return FindLibrary(libName);
+            return FindLibraryStatic(libName);
         }
 
         private string[] GetAvailableArchitectures(bool gpu)
@@ -823,11 +834,19 @@ namespace UndreamAI.LlamaLib
             if (availableLibraries == null)
                 return false;
 
-            if (libraryHandle != IntPtr.Zero)
-            {
-                try { LibraryLoader.FreeLibrary(libraryHandle); } catch {}
-                libraryHandle = IntPtr.Zero;
-            }
+            // Deliberately NOT calling FreeLibrary on libraryHandle here. These architecture
+            // libraries (llamalib_*_avxN/noavx/...) statically link ggml, which on Windows uses
+            // the system OpenMP runtime (vcomp140.dll) when available. That runtime keeps a
+            // persistent worker-thread pool alive for the life of the process, with no supported
+            // API (MSVC's OpenMP only implements the old 2.0 spec) to drain it on demand. If those
+            // threads are still running when we unload the DLL -- and this was the last user of
+            // vcomp140.dll -- Windows unmaps it out from under them and they crash on their next
+            // instruction (observed as an access violation inside "VCOMP140.DLL_unloaded").
+            // Leaving the handle loaded costs a few MB of address space for the process lifetime,
+            // which is far cheaper than a nondeterministic crash. macOS/Linux builds don't hit
+            // this because ggml falls back to its own explicitly-joined thread pool there instead
+            // of OpenMP (find_package(OpenMP) fails on stock Xcode Clang).
+            libraryHandle = IntPtr.Zero;
 
             while (++currentLibraryIndex < availableLibraries.Count)
             {
@@ -854,8 +873,10 @@ namespace UndreamAI.LlamaLib
                 {
                     if (libraryHandle != IntPtr.Zero)
                     {
+                        // See comment above LibraryLoader.LoadLibrary at the top of this method:
+                        // do not FreeLibrary a partially-initialized architecture library either,
+                        // since it may already have started an OpenMP-backed compute call.
                         if (debugLevelGlobal > 0) Console.WriteLine($"Failed to load library {library}: {ex.Message}.");
-                        try { LibraryLoader.FreeLibrary(libraryHandle); } catch {}
                         libraryHandle = IntPtr.Zero;
                     }
                 }
@@ -991,7 +1012,10 @@ namespace UndreamAI.LlamaLib
 
         public void Dispose()
         {
-            LibraryLoader.FreeLibrary(libraryHandle);
+            // Not calling FreeLibrary(libraryHandle) here -- see the comment in TryNextLibrary().
+            // This architecture library may have live OpenMP worker threads (Windows/vcomp140.dll)
+            // that we have no supported way to drain first; unloading it under them can crash the
+            // process. Just drop our reference and let the OS reclaim it at process exit.
             libraryHandle = IntPtr.Zero;
             foreach (IntPtr dependencyHandle in dependencyHandles) LibraryLoader.FreeLibrary(dependencyHandle);
             dependencyHandles.Clear();
