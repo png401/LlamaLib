@@ -312,6 +312,10 @@ namespace UndreamAI.LlamaLib
         public bool Start()
         {
             CheckLlamaLib();
+            // Mark before the native call, not after checking success: even a failed start
+            // attempt can leave ggml's OpenMP worker-thread pool partially spun up on Windows,
+            // so the architecture library must be treated as unsafe to unload either way.
+            llamaLib.MarkNativeServiceStarted();
             llamaLib.LLM_Start(llm);
             return llamaLib.LLM_Started(llm);
         }
@@ -319,6 +323,7 @@ namespace UndreamAI.LlamaLib
         public async Task<bool> StartAsync()
         {
             CheckLlamaLib();
+            llamaLib.MarkNativeServiceStarted();
             return await Task.Run(() =>
             {
                 llamaLib.LLM_Start(llm);

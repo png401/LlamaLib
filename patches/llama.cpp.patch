@@ -372,3 +372,16 @@ index 06318463f..4be0fe6e6 100644
      std::setlocale(LC_NUMERIC, "C");
  
      // own arguments required by this example
+diff --git a/common/jinja/runtime.cpp b/common/jinja/runtime.cpp
+index f81d98d95..4f17df86b 100644
+--- a/common/jinja/runtime.cpp
++++ b/common/jinja/runtime.cpp
+@@ -684,7 +684,7 @@ value macro_statement::execute_impl(context & ctx) {
+     }
+     std::string name = cast_stmt<identifier>(this->name)->val;
+ 
+-    const func_handler func = [this, name, &ctx](const func_args & args) -> value {
++    const func_handler func = [this, name, ctx](const func_args & args) mutable -> value {
+         size_t expected_count = this->args.size();
+         size_t input_count = args.count();
+ 

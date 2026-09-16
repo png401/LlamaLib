@@ -46,6 +46,11 @@ namespace UndreamAI.LlamaLib
             IntPtr llmInstance = IntPtr.Zero;
             try
             {
+                // Has_GPU_Layers is a static delegate that is only resolved once the runtime
+                // dispatcher library is loaded. Ensure that happens before calling it here,
+                // since this may be the first LlamaLib API used in the process (no LlamaLib
+                // instance -- whose constructor would normally trigger the load -- exists yet).
+                LlamaLib.LoadRuntimeLibrary();
                 llamaLibInstance = new LlamaLib(LlamaLib.Has_GPU_Layers(paramsString ?? string.Empty));
                 llmInstance = llamaLibInstance.LLMService_From_Command(paramsString ?? string.Empty);
             }
