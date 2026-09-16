@@ -70,6 +70,16 @@ else()
     add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
 endif()
 
+if (MSVC)
+    # third_party/llama.cpp sets this for its own subtree, but LlamaLib's own
+    # targets (src/, tools/, tests/) are added via a sibling add_subdirectory
+    # and don't inherit it. Without it, MSVC interprets UTF-8 source files
+    # (e.g. common/jinja/utils.h) using the active Windows code page, which
+    # garbles multi-byte literals on non-UTF-8 locales (e.g. C2001 errors).
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
+endif()
+
 string(REGEX MATCH "^[^_]+" PLATFORM "${ARCHITECTURE}")
 
 set(LLAMALIB_ARCHITECTURE_LIBRARY "llamalib_${ARCHITECTURE}")
