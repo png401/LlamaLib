@@ -648,6 +648,19 @@ namespace UndreamAI.LlamaLib
         private List<Tuple<string, bool>> availableLibraries = null;
         private int currentLibraryIndex = 0;
 
+        // Set the moment LLM.Start()/StartAsync() attempts to start the native service on this
+        // instance's architecture library -- regardless of whether the attempt succeeds. A failed
+        // start can still have partially spun up ggml's OpenMP-backed worker-thread pool, so once
+        // an attempt has been made we must keep treating this library as unsafe to unload on
+        // Windows (see Dispose() below). Sticky: never reset back to false, since Stop() does not
+        // necessarily drain those pooled threads either.
+        private bool nativeServiceStarted = false;
+
+        internal void MarkNativeServiceStarted()
+        {
+            nativeServiceStarted = true;
+        }
+
         // Runtime lib
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate IntPtr Available_Architectures_Delegate([MarshalAs(UnmanagedType.I1)] bool gpu);
@@ -1026,13 +1039,19 @@ namespace UndreamAI.LlamaLib
 
         public void Dispose()
         {
-            // Not calling FreeLibrary(libraryHandle) on Windows -- see the comment in
-            // TryNextLibrary(). This architecture library may have live OpenMP worker
-            // threads (Windows/vcomp140.dll) that we have no supported way to drain
-            // first; unloading it under them can crash the process. Just drop our
-            // reference there and let the OS reclaim it at process exit. macOS/Linux
-            // don't hit this and keep freeing the handle as before.
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            // Not calling FreeLibrary(libraryHandle) on Windows when a start was ever attempted
+            // on this instance -- see the comment in TryNextLibrary(). This architecture library
+            // may have live OpenMP worker threads (Windows/vcomp140.dll) that we have no supported
+            // way to drain first; unloading it under them can crash the process. Just drop our
+            // reference there and let the OS reclaim it at process exit. macOS/Linux don't hit
+            // this and keep freeing the handle as before.
+            //
+            // If Start() was never attempted, this handle's architecture library was only ever
+            // used (at most) to probe availability/GPU-support in TryNextLibrary() -- no service
+            // loop was ever spun up on it -- so it's safe (and necessary, to let a subsequent
+            // LlamaLib construction in this process see a fresh DllMain/global-static init rather
+            // than reuse a stale, torn-down native state) to free it normally.
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) || !nativeServiceStarted)
             {
                 LibraryLoader.FreeLibrary(libraryHandle);
             }
