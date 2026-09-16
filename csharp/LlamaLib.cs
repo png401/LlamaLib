@@ -677,7 +677,10 @@ namespace UndreamAI.LlamaLib
         public IntPtr LLMService_From_Command_Internal([MarshalAs(UnmanagedType.LPStr)] string paramsString) => CreateLLMWithFallback(() => LLMService_From_Command_Internal_Single(paramsString));
 
 
-        private void LoadRuntimeLibrary()
+        // Loads the runtime dispatcher library and resolves its static delegates (Has_GPU_Layers,
+        // Available_Architectures). Must be safe to call before any LlamaLib instance exists, since
+        // callers like LLMService.FromCommand need Has_GPU_Layers before they can construct one.
+        internal static void LoadRuntimeLibrary()
         {
             lock (runtimeLock)
             {
@@ -720,6 +723,14 @@ namespace UndreamAI.LlamaLib
 
         public virtual string FindLibrary(string libraryName)
         {
+            return FindLibraryStatic(libraryName);
+        }
+
+        // Non-virtual lookup shared by FindLibrary and the static bootstrap path
+        // (GetRuntimeLibraryPath / LoadRuntimeLibrary), which run before any LlamaLib
+        // instance exists and therefore cannot go through virtual dispatch.
+        private static string FindLibraryStatic(string libraryName)
+        {
             List<string> lookupDirs = new List<string>();
             lookupDirs.Add(baseLibraryPath);
             lookupDirs.Add(Path.Combine(baseLibraryPath, "runtimes", GetPlatform(), "native"));
@@ -733,7 +744,7 @@ namespace UndreamAI.LlamaLib
             throw new InvalidOperationException($"Library {libraryName} not found!");
         }
 
-        private string GetRuntimeLibraryPath()
+        private static string GetRuntimeLibraryPath()
         {
             string platform = GetPlatform();
             string libName;
@@ -745,7 +756,7 @@ namespace UndreamAI.LlamaLib
                 libName = "llamalib_" + platform + "_runtime.dll";
             else
                 throw new ArgumentException("Unknown platform " + RuntimeInformation.OSDescription);
-            return FindLibrary(libName);
+            return FindLibraryStatic(libName);
         }
 
         private string[] GetAvailableArchitectures(bool gpu)
