@@ -834,9 +834,26 @@ namespace UndreamAI.LlamaLib
             if (availableLibraries == null)
                 return false;
 
+            // On Windows, these architecture libraries (llamalib_*_avxN/noavx/...) statically
+            // link ggml, which uses the system OpenMP runtime (vcomp140.dll) when available.
+            // That runtime keeps a persistent worker-thread pool alive for the life of the
+            // process, with no supported API (MSVC's OpenMP only implements the old 2.0 spec)
+            // to drain it on demand. If those threads are still running when we unload the DLL
+            // -- and this was the last user of vcomp140.dll -- Windows unmaps it out from under
+            // them and they crash on their next instruction (observed as an access violation in
+            // "VCOMP140.DLL_unloaded"). Leaving the handle loaded costs a few MB of address space
+            // for the process lifetime, far cheaper than a nondeterministic crash. macOS/Linux
+            // don't hit this since ggml falls back to its own explicitly-joined thread pool there
+            // (find_package(OpenMP) fails on stock Xcode Clang), so only skip FreeLibrary on
+            // Windows -- other platforms keep freeing the handle as before.
+            bool skipFreeLibrary = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+
             if (libraryHandle != IntPtr.Zero)
             {
-                try { LibraryLoader.FreeLibrary(libraryHandle); } catch {}
+                if (!skipFreeLibrary)
+                {
+                    try { LibraryLoader.FreeLibrary(libraryHandle); } catch {}
+                }
                 libraryHandle = IntPtr.Zero;
             }
 
@@ -866,7 +883,14 @@ namespace UndreamAI.LlamaLib
                     if (libraryHandle != IntPtr.Zero)
                     {
                         if (debugLevelGlobal > 0) Console.WriteLine($"Failed to load library {library}: {ex.Message}.");
-                        try { LibraryLoader.FreeLibrary(libraryHandle); } catch {}
+                        // See comment above LibraryLoader.LoadLibrary at the top of this method:
+                        // do not FreeLibrary a partially-initialized architecture library on
+                        // Windows either, since it may already have started an OpenMP-backed
+                        // compute call.
+                        if (!skipFreeLibrary)
+                        {
+                            try { LibraryLoader.FreeLibrary(libraryHandle); } catch {}
+                        }
                         libraryHandle = IntPtr.Zero;
                     }
                 }
@@ -1002,7 +1026,16 @@ namespace UndreamAI.LlamaLib
 
         public void Dispose()
         {
-            LibraryLoader.FreeLibrary(libraryHandle);
+            // Not calling FreeLibrary(libraryHandle) on Windows -- see the comment in
+            // TryNextLibrary(). This architecture library may have live OpenMP worker
+            // threads (Windows/vcomp140.dll) that we have no supported way to drain
+            // first; unloading it under them can crash the process. Just drop our
+            // reference there and let the OS reclaim it at process exit. macOS/Linux
+            // don't hit this and keep freeing the handle as before.
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                LibraryLoader.FreeLibrary(libraryHandle);
+            }
             libraryHandle = IntPtr.Zero;
             foreach (IntPtr dependencyHandle in dependencyHandles) LibraryLoader.FreeLibrary(dependencyHandle);
             dependencyHandles.Clear();
